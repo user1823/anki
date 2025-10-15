@@ -267,6 +267,7 @@ impl super::SqliteStorage {
                 mtime: row.get(3)?,
                 current_deck_id: row.get(4)?,
                 original_deck_id: row.get(5)?,
+                reps: row.get(6)?,
                 kind: DueCardKind::Learning,
             })
         }
