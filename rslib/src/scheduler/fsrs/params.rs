@@ -271,16 +271,17 @@ impl Collection {
         Ok(())
     }
 
-    pub fn evaluate_params(
+    pub fn evaluate_fsrs(
         &mut self,
         search: &str,
         ignore_revlogs_before: TimestampMillis,
         num_of_relearning_steps: usize,
-    ) -> Result<ModelEvaluation> {
+    ) -> Result<(ModelEvaluation, f32, f32)> {
         let timing = self.timing_today()?;
         let revlogs = self.revlog_for_srs(search)?;
         let (items, review_count) =
             fsrs_items_for_training(revlogs, timing.next_day_at, ignore_revlogs_before);
+        let fsrs_item_count = items.len() as u32;
         let mut anki_progress = self.new_progress_handler::<ComputeParamsProgress>();
         anki_progress.state.reviews = review_count as u32;
         let fsrs = FSRS::new(None)?;
@@ -290,14 +291,23 @@ impl Collection {
             enable_short_term: true,
             num_relearning_steps: Some(num_of_relearning_steps),
         };
-        Ok(fsrs.evaluate_with_time_series_splits(input, |ip| {
+        let eval = fsrs.evaluate_with_time_series_splits(input, |ip| {
             anki_progress
                 .update(false, |p| {
                     p.total_iterations = ip.total as u32;
                     p.current_iteration = ip.current as u32;
                 })
                 .is_ok()
-        })?)
+        })?;
+
+        // Normalize the values
+        let r = items.iter().fold(0, |p, item| {
+            p + (item.reviews.last().map(|review| review.rating).unwrap_or(0) > 1) as u32
+        }) as f32
+            / fsrs_item_count as f32;
+        let normalized_log_loss = eval.log_loss / log_loss_adjustment(r);
+        let normalized_rmse_bins = eval.rmse_bins / rmse_adjustment(r, fsrs_item_count);
+        Ok((eval, normalized_log_loss, normalized_rmse_bins))
     }
 
     pub fn evaluate_params_legacy(
