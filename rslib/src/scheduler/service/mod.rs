@@ -300,18 +300,20 @@ impl crate::services::SchedulerService for Collection {
         })
     }
 
-    fn evaluate_params(
+    fn evaluate_fsrs(
         &mut self,
-        input: scheduler::EvaluateParamsRequest,
-    ) -> Result<scheduler::EvaluateParamsResponse> {
-        let ret = self.evaluate_params(
+        input: scheduler::EvaluateFsrsRequest,
+    ) -> Result<scheduler::EvaluateFsrsResponse> {
+        let (eval, normalized_log_loss, normalized_rmse_bins) = self.evaluate_fsrs(
             &input.search,
             input.ignore_revlogs_before_ms.into(),
             input.num_of_relearning_steps as usize,
         )?;
-        Ok(scheduler::EvaluateParamsResponse {
-            log_loss: ret.log_loss,
-            rmse_bins: ret.rmse_bins,
+        Ok(scheduler::EvaluateFsrsResponse {
+            log_loss: eval.log_loss,
+            rmse_bins: eval.rmse_bins,
+            normalized_log_loss,
+            normalized_rmse_bins,
         })
     }
 

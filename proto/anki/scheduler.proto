@@ -57,7 +57,7 @@ service SchedulerService {
       returns (SimulateFsrsReviewResponse);
   rpc SimulateFsrsWorkload(SimulateFsrsReviewRequest)
       returns (SimulateFsrsWorkloadResponse);
-  rpc EvaluateParams(EvaluateParamsRequest) returns (EvaluateParamsResponse);
+  rpc EvaluateFsrs(EvaluateFsrsRequest) returns (EvaluateFsrsResponse);
   rpc EvaluateParamsLegacy(EvaluateParamsLegacyRequest)
       returns (EvaluateParamsResponse);
   rpc ComputeMemoryState(cards.CardId) returns (ComputeMemoryStateResponse);
@@ -450,7 +450,7 @@ message GetOptimalRetentionParametersResponse {
   uint32 relearning_step_count = 14;
 }
 
-message EvaluateParamsRequest {
+message EvaluateFsrsRequest {
   string search = 1;
   int64 ignore_revlogs_before_ms = 2;
   uint32 num_of_relearning_steps = 3;
@@ -465,6 +465,13 @@ message EvaluateParamsLegacyRequest {
 message EvaluateParamsResponse {
   float log_loss = 1;
   float rmse_bins = 2;
+}
+
+message EvaluateFsrsResponse {
+  float log_loss = 1;
+  float rmse_bins = 2;
+  float normalized_log_loss = 3;
+  float normalized_rmse_bins = 4;
 }
 
 message ComputeMemoryStateResponse {

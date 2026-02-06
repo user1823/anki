@@ -10,6 +10,7 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
     import { SimulateFsrsReviewRequest } from "@generated/anki/scheduler_pb";
     import {
         computeFsrsParams,
+        evaluateFsrs,
         evaluateParamsLegacy,
         getRetentionWorkload,
         setWantsAbort,
@@ -63,10 +64,11 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
     let computeParamsProgress: ComputeParamsProgress | undefined;
     let computingParams = false;
     let checkingParams = false;
+    let checkingHealth = false;
 
     const healthCheck = state.fsrsHealthCheck;
 
-    $: computing = computingParams || checkingParams;
+    $: computing = computingParams || checkingParams || checkingHealth;
     $: defaultparamSearch = `preset:"${state.getCurrentNameForSearch()}" -is:suspended`;
     $: roundedRetention = Number(effectiveDesiredRetention.toFixed(2));
     $: desiredRetentionWarning = getRetentionLongShortWarning(roundedRetention);
@@ -186,6 +188,20 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
         );
     }
 
+    function getNumOfRelearningStepsInDay(): number {
+        const relearningSteps = $config.relearnSteps;
+        let numOfRelearningStepsInDay = 0;
+        let accumulatedTime = 0;
+        for (let i = 0; i < relearningSteps.length; i++) {
+            accumulatedTime += relearningSteps[i];
+            if (accumulatedTime >= 1440) {
+                break;
+            }
+            numOfRelearningStepsInDay++;
+        }
+        return numOfRelearningStepsInDay;
+    }
+
     async function computeParams(): Promise<void> {
         if (computingParams) {
             await setWantsAbort({});
@@ -201,23 +217,13 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
             await runWithBackendProgress(
                 async () => {
                     const params = fsrsParams($config);
-                    const RelearningSteps = $config.relearnSteps;
-                    let numOfRelearningStepsInDay = 0;
-                    let accumulatedTime = 0;
-                    for (let i = 0; i < RelearningSteps.length; i++) {
-                        accumulatedTime += RelearningSteps[i];
-                        if (accumulatedTime >= 1440) {
-                            break;
-                        }
-                        numOfRelearningStepsInDay++;
-                    }
                     const resp = await computeFsrsParams({
                         search: $config.paramSearch
                             ? $config.paramSearch
                             : defaultparamSearch,
                         ignoreRevlogsBeforeMs: getIgnoreRevlogsBeforeMs(),
                         currentParams: params,
-                        numOfRelearningSteps: numOfRelearningStepsInDay,
+                        numOfRelearningSteps: getNumOfRelearningStepsInDay(),
                         healthCheck: $healthCheck,
                     });
 
@@ -312,6 +318,51 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
             );
         } finally {
             checkingParams = false;
+        }
+    }
+
+    async function checkHealth(): Promise<void> {
+        if (checkingHealth) {
+            await setWantsAbort({});
+            return;
+        }
+        if (state.presetAssignmentsChanged()) {
+            alert(tr.deckConfigPleaseSaveYourChangesFirst());
+            return;
+        }
+        checkingHealth = true;
+        computeParamsProgress = undefined;
+        try {
+            await runWithBackendProgress(
+                async () => {
+                    const search = $config.paramSearch
+                        ? $config.paramSearch
+                        : defaultparamSearch;
+                    const resp = await evaluateFsrs({
+                        search,
+                        ignoreRevlogsBeforeMs: getIgnoreRevlogsBeforeMs(),
+                        numOfRelearningSteps: getNumOfRelearningStepsInDay(),
+                    });
+                    if (computeParamsProgress) {
+                        computeParamsProgress.current = computeParamsProgress.total;
+                    }
+                    const message = [
+                    `Log loss: ${resp.logLoss.toFixed(4)}, RMSE(bins): ${(resp.rmseBins * 100).toFixed(2)}%. ${tr.deckConfigSmallerIsBetter()}`,
+                    `Normalized values:`,
+                    `Log loss: ${resp.normalizedLogLoss.toFixed(4)}, RMSE(bins): ${(resp.normalizedRmseBins).toFixed(4)}`,
+                    `The values are normalized for review count and average retention rate.`,
+                    `The Log loss should be ≤ 1.11 and RMSE(bins) should be ≤ 1.53.`,
+                    ].join("\n");
+                    setTimeout(() => alert(message), 200);
+                },
+                (progress) => {
+                    if (progress.value.case === "computeParams") {
+                        computeParamsProgress = progress.value.value;
+                    }
+                },
+            );
+        } finally {
+            checkingHealth = false;
         }
     }
 
@@ -431,6 +482,17 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
             {tr.deckConfigOptimizeButton()}
         {/if}
     </button>
+    <button
+        class="btn {checkingHealth ? 'btn-warning' : 'btn-primary'}"
+        disabled={!checkingHealth && computing}
+        on:click={() => checkHealth()}
+    >
+        {#if checkingHealth}
+            {tr.actionsCancel()}
+        {:else}
+            {tr.deckConfigHealthCheckButton()}
+        {/if}
+    </button>
     {#if state.legacyEvaluate}
         <button
             class="btn {checkingParams ? 'btn-warning' : 'btn-primary'}"
@@ -445,7 +507,7 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
         </button>
     {/if}
     <div>
-        {#if computingParams || checkingParams}
+        {#if computingParams || checkingParams || checkingHealth}
             {computeParamsProgressString}
         {:else if totalReviews !== undefined}
             {tr.statisticsReviews({ reviews: totalReviews })}
