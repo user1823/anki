@@ -14,6 +14,7 @@ use itertools::Itertools;
 
 use super::params::ignore_revlogs_before_ms_from_config;
 use super::rescheduler::Rescheduler;
+use crate::card::CardQueue;
 use crate::card::CardType;
 use crate::prelude::*;
 use crate::revlog::RevlogEntry;
@@ -180,8 +181,8 @@ impl Collection {
                     let Some(last_review) = &last_info.last_reviewed_at else {
                         return Ok(());
                     };
-                    // the card isn't in (re)learning
-                    if card.ctype != CardType::Review {
+                    // the card isn't in (re)learning or suspended
+                    if card.ctype != CardType::Review || card.queue == CardQueue::Suspended {
                         return Ok(());
                     };
 
