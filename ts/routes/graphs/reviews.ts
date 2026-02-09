@@ -116,18 +116,34 @@ export function renderReviews(
     }
     const desiredBars = Math.min(70, Math.abs(xMin!));
 
-    const x = scaleLinear().domain([xMin!, xMax]);
-    if (range === GraphRange.AllTime) {
-        x.nice(desiredBars);
+    const unboundRange = range == GraphRange.AllTime;
+    const originalXMin = xMin!;
+
+    // Create initial scale to determine tick spacing
+    let x = scaleLinear().domain([xMin!, xMax]);
+    let thresholds = x.ticks(desiredBars);
+    // For unbound ranges, extend xMin backward so that the oldest bin has the same width as others
+    if (unboundRange && thresholds.length >= 2) {
+        const spacing = thresholds[1] - thresholds[0];
+        const partial = thresholds[0] - xMin!;
+        if (spacing > 0 && partial > 0 && partial < spacing) {
+            xMin = thresholds[0] - spacing;
+            x = scaleLinear().domain([xMin, xMax]);
+            thresholds = x.ticks(desiredBars);
+        }
+    }
+    // For Year & All Time, shift thresholds forward by one day to make first bin 0-4 instead of 0-5
+    if (range === GraphRange.Year || range === GraphRange.AllTime) {
+        thresholds = [...new Set(thresholds.map((t) => Math.min(t + 1, 1)))].sort(
+            (a, b) => a - b,
+        );
     }
 
     const sourceMap = showTime ? sourceData.reviewTime : sourceData.reviewCount;
     const bins = bin()
-        .value((m) => {
-            return m[0];
-        })
+        .value((m) => m[0])
         .domain(x.domain() as any)
-        .thresholds(x.ticks(desiredBars))(sourceMap.entries() as any);
+        .thresholds(thresholds)(sourceMap.entries() as any);
 
     // empty graph?
     const totalDays = sum(bins, (bin) => bin.length);
@@ -140,7 +156,9 @@ export function renderReviews(
 
     x.range([bounds.marginLeft, bounds.width - bounds.marginRight]);
     svg.select<SVGGElement>(".x-ticks")
-        .call((selection) => selection.transition(trans).call(axisBottom(x).ticks(7).tickSizeOuter(0)))
+        .call((selection) =>
+            selection.transition(trans).call(axisBottom(x).ticks(7).tickSizeOuter(0)),
+        )
         .attr("direction", "ltr");
 
     // y scale
@@ -169,7 +187,7 @@ export function renderReviews(
                     .ticks(bounds.height / 50)
                     .tickSizeOuter(0)
                     .tickFormat(yTickFormat as any),
-            )
+            ),
         )
         .attr("direction", "ltr");
 
@@ -182,8 +200,12 @@ export function renderReviews(
 
     const cappedRange = scaleLinear().range([0.3, 0.5]);
     const shiftedRange = scaleLinear().range([0.4, 0.7]);
-    const darkerGreens = scaleSequential((n) => interpolateGreens(shiftedRange(n)!)).domain(x.domain() as any);
-    const lighterGreens = scaleSequential((n) => interpolateGreens(cappedRange(n)!)).domain(x.domain() as any);
+    const darkerGreens = scaleSequential((n) =>
+        interpolateGreens(shiftedRange(n)!),
+    ).domain(x.domain() as any);
+    const lighterGreens = scaleSequential((n) =>
+        interpolateGreens(cappedRange(n)!),
+    ).domain(x.domain() as any);
     const reds = scaleSequential((n) => interpolateReds(cappedRange(n)!)).domain(
         x.domain() as any,
     );
@@ -248,11 +270,16 @@ export function renderReviews(
                 day: "numeric",
             });
         }
-        const day = dayLabel(d.x0!, d.x1!);
+        // Convert bin boundaries [x0, x1) for dayLabel
+        // If bin ends at 0, treat it as crossing zero so day 0 is included
+        // For the first (oldest) bin, use the original xMin to ensure labels match the intended range
+        const isFirstBin = bins.length > 0 && d.x0 === bins[0].x0;
+        const startDay = isFirstBin ? originalXMin : Math.floor(d.x0!);
+        const endDay = d.x1! === 0 ? 1 : d.x1!;
+        const day = dayLabel(startDay, endDay);
         const totals = totalsForBin(d);
         const dayTotal = valueLabel(sum(totals));
-        let buf =
-            `<table><tr><td colspan="2">${dateStr}<td></tr><tr><td>${day}</td><td align=end>${dayTotal}</td></tr>`;
+        let buf = `<table><tr><td colspan="2">${dateStr}<td></tr><tr><td>${day}</td><td align=end>${dayTotal}</td></tr>`;
         const lines: [BinIndex | null, string][] = [
             [BinIndex.Filtered, tr.statisticsCountsFilteredCards()],
             [BinIndex.Learn, tr.statisticsCountsLearningCards()],
@@ -303,7 +330,10 @@ export function renderReviews(
                         .attr("height", 0)
                         .call((d) => updateBar(d, barNum)),
                 (update) => update.call((d) => updateBar(d, barNum)),
-                (remove) => remove.call((remove) => remove.transition(trans).attr("height", 0).attr("y", y(0)!)),
+                (remove) =>
+                    remove.call((remove) =>
+                        remove.transition(trans).attr("height", 0).attr("y", y(0)!),
+                    ),
             );
     }
 
@@ -323,7 +353,7 @@ export function renderReviews(
                         .ticks(bounds.height / 50)
                         .tickFormat(yTickFormat as any)
                         .tickSizeOuter(0),
-                )
+                ),
             )
             .attr("direction", "ltr");
 
@@ -364,7 +394,8 @@ export function renderReviews(
         })
         .on("mouseout", hideTooltip);
 
-    const periodDays = -xMin + 1;
+    // The xMin might be extended for bin alignment, so use the original xMin
+    const periodDays = -originalXMin + 1;
     const studiedDays = sum(bins, (bin) => bin.length);
     const studiedPercent = (studiedDays / periodDays) * 100;
     const total = yCumMax;
