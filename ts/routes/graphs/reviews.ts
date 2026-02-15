@@ -52,7 +52,10 @@ export interface GraphData {
 type BinType = Bin<Map<number, Reviews[]>, number>;
 
 export function gatherData(data: GraphsResponse): GraphData {
-    return { reviewCount: numericMap(data.reviews!.count), reviewTime: numericMap(data.reviews!.time) };
+    return {
+        reviewCount: numericMap(data.reviews!.count),
+        reviewTime: numericMap(data.reviews!.time),
+    };
 }
 
 enum BinIndex {
@@ -91,37 +94,51 @@ export function renderReviews(
     const svg = select(svgElem);
     const trans = svg.transition().duration(600) as any;
 
-    const xMax = 1;
-    let xMin = 0;
+    const xMin = -1;
+    let xMax = 0;
     // cap max to selected range
     switch (range) {
         case GraphRange.Month:
-            xMin = -30;
+            xMax = 30;
             break;
         case GraphRange.ThreeMonths:
-            xMin = -89;
+            xMax = 89;
             break;
         case GraphRange.Year:
-            xMin = -364;
+            xMax = 364;
             break;
         case GraphRange.AllTime:
-            xMin = min(sourceData.reviewCount.keys())!;
+            xMax = Math.abs(min(sourceData.reviewCount.keys())!);
             break;
     }
-    const desiredBars = Math.min(70, Math.abs(xMin!));
+    const desiredBars = Math.min(70, xMax);
+    const unboundRange = range == GraphRange.AllTime;
 
-    const x = scaleLinear().domain([xMin!, xMax]);
-    if (range === GraphRange.AllTime) {
-        x.nice(desiredBars);
+    // Transform data to use absolute values (days ago)
+    const sourceMap = showTime ? sourceData.reviewTime : sourceData.reviewCount;
+    const transformedData = Array.from(sourceMap.entries()).map(
+        ([day, reviews]) => [Math.abs(day), reviews] as [number, Reviews],
+    );
+
+    let x = scaleLinear().domain([xMin, xMax]);
+    let thresholds = x.ticks(desiredBars);
+
+    // For unbound ranges, extend xMax forward so that the last bin has the same width as others
+    if (unboundRange && thresholds.length >= 2) {
+        const spacing = thresholds[1] - thresholds[0];
+        const lastThreshold = thresholds[thresholds.length - 1];
+        const partial = xMax - lastThreshold;
+        if (spacing > 0 && partial > 0 && partial < spacing) {
+            xMax = lastThreshold + spacing;
+            x = scaleLinear().domain([xMin, xMax]);
+            thresholds = x.ticks(desiredBars);
+        }
     }
 
-    const sourceMap = showTime ? sourceData.reviewTime : sourceData.reviewCount;
     const bins = bin()
-        .value((m) => {
-            return m[0];
-        })
+        .value((m) => m[0])
         .domain(x.domain() as any)
-        .thresholds(x.ticks(desiredBars))(sourceMap.entries() as any);
+        .thresholds(thresholds)(transformedData as any);
 
     // empty graph?
     const totalDays = sum(bins, (bin) => bin.length);
@@ -132,9 +149,11 @@ export function renderReviews(
         setDataAvailable(svg, true);
     }
 
-    x.range([bounds.marginLeft, bounds.width - bounds.marginRight]);
+    x.range([bounds.width - bounds.marginRight, bounds.marginLeft]);
     svg.select<SVGGElement>(".x-ticks")
-        .call((selection) => selection.transition(trans).call(axisBottom(x).ticks(7).tickSizeOuter(0)))
+        .call((selection) =>
+            selection.transition(trans).call(axisBottom(x).ticks(7).tickSizeOuter(0)),
+        )
         .attr("direction", "ltr");
 
     // y scale
@@ -163,21 +182,25 @@ export function renderReviews(
                     .ticks(bounds.height / 50)
                     .tickSizeOuter(0)
                     .tickFormat(yTickFormat as any),
-            )
+            ),
         )
         .attr("direction", "ltr");
 
     // x bars
 
     function barWidth(d: Bin<number, number>): number {
-        const width = Math.max(0, x(d.x1!) - x(d.x0!) - 1);
+        const width = Math.max(0, x(d.x0!) - x(d.x1!) - 1);
         return width ?? 0;
     }
 
     const cappedRange = scaleLinear().range([0.3, 0.5]);
     const shiftedRange = scaleLinear().range([0.4, 0.7]);
-    const darkerGreens = scaleSequential((n) => interpolateGreens(shiftedRange(n)!)).domain(x.domain() as any);
-    const lighterGreens = scaleSequential((n) => interpolateGreens(cappedRange(n)!)).domain(x.domain() as any);
+    const darkerGreens = scaleSequential((n) =>
+        interpolateGreens(shiftedRange(n)!),
+    ).domain(x.domain() as any);
+    const lighterGreens = scaleSequential((n) =>
+        interpolateGreens(cappedRange(n)!),
+    ).domain(x.domain() as any);
     const reds = scaleSequential((n) => interpolateReds(cappedRange(n)!)).domain(
         x.domain() as any,
     );
@@ -212,10 +235,43 @@ export function renderReviews(
     }
 
     function tooltipText(d: BinType, cumulative: number): string {
-        const day = dayLabel(d.x0!, d.x1!);
+        let dateStr: string;
+        const now = new Date();
+        if (d.x1! - d.x0! > 1) {
+            // range (year)
+            let startDate = timeDay.offset(now, Math.floor(d.x0!));
+            startDate = timeHour.offset(startDate, -sourceData.rolloverHour);
+            let endDate = timeDay.offset(now, Math.floor(d.x1!) - 1);
+            endDate = timeHour.offset(endDate, -sourceData.rolloverHour);
+            const startDateStr = localizedDate(startDate, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+            });
+            const endDateStr = localizedDate(endDate, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+            });
+            dateStr = startDateStr + " - " + endDateStr;
+        } else {
+            // 1 month, 3 months
+            let date = timeDay.offset(now, Math.floor(d.x0!));
+            date = timeHour.offset(date, -sourceData.rolloverHour);
+            dateStr = localizedDate(date, {
+                weekday: "long",
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+            });
+        }
+        // Bins are [x0, x1) where x0 and x1 are absolute "days ago"
+        // Convert back to negative days for dayLabel
+        // [5, 10) → (-10, -5], which displays as "5-9 days ago"
+        const day = dayLabel(-d.x1!, -d.x0!);
         const totals = totalsForBin(d);
         const dayTotal = valueLabel(sum(totals));
-        let buf = `<table><tr><td>${day}</td><td align=end>${dayTotal}</td></tr>`;
+        let buf = `<table><tr><td colspan="2">${dateStr}<td></tr><tr><td>${day}</td><td align=end>${dayTotal}</td></tr>`;
         const lines: [BinIndex | null, string][] = [
             [BinIndex.Filtered, tr.statisticsCountsFilteredCards()],
             [BinIndex.Learn, tr.statisticsCountsLearningCards()],
@@ -266,7 +322,10 @@ export function renderReviews(
                         .attr("height", 0)
                         .call((d) => updateBar(d, barNum)),
                 (update) => update.call((d) => updateBar(d, barNum)),
-                (remove) => remove.call((remove) => remove.transition(trans).attr("height", 0).attr("y", y(0)!)),
+                (remove) =>
+                    remove.call((remove) =>
+                        remove.transition(trans).attr("height", 0).attr("y", y(0)!),
+                    ),
             );
     }
 
@@ -286,7 +345,7 @@ export function renderReviews(
                         .ticks(bounds.height / 50)
                         .tickFormat(yTickFormat as any)
                         .tickSizeOuter(0),
-                )
+                ),
             )
             .attr("direction", "ltr");
 

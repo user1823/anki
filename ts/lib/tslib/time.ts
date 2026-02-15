@@ -172,6 +172,8 @@ export function dayLabel(daysStart: number, daysEnd: number): string {
         }
     } else {
         // range
+        // For future days: bin [5, 10) should display "In 5-9 days"
+        // For past days: bin (-10, -5] should display "5-9 days ago"
         if (daysStart >= 0) {
             return tr.statisticsInDaysRange({
                 daysStart,
@@ -179,8 +181,8 @@ export function dayLabel(daysStart: number, daysEnd: number): string {
             });
         } else {
             return tr.statisticsDaysAgoRange({
-                daysStart: Math.abs(daysEnd - 1),
-                daysEnd: -daysStart,
+                daysStart: Math.abs(daysEnd),
+                daysEnd: Math.abs(daysStart) - 1,
             });
         }
     }
