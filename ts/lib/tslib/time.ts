@@ -161,9 +161,7 @@ export function timeSpan(
 }
 
 export function dayLabel(daysStart: number, daysEnd: number): string {
-    const larger = Math.max(Math.abs(daysStart), Math.abs(daysEnd));
-    const smaller = Math.min(Math.abs(daysStart), Math.abs(daysEnd));
-    if (larger - smaller <= 1) {
+    if (Math.abs(daysEnd - daysStart) <= 1) {
         // singular
         if (daysStart >= 0) {
             return tr.statisticsInDaysSingle({ days: daysStart });
