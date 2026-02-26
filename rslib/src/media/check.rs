@@ -224,13 +224,10 @@ impl MediaChecker<'_> {
                 continue;
             }
 
-            // ignore large files and zero byte files
+            // ignore large files
             let metadata = dentry.metadata()?;
             if metadata.len() > MAX_INDIVIDUAL_MEDIA_FILE_SIZE as u64 {
                 out.oversize.push(disk_fname.to_string());
-                continue;
-            }
-            if metadata.len() == 0 {
                 continue;
             }
 
