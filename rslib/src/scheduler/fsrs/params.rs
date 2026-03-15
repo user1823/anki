@@ -526,7 +526,7 @@ pub(crate) fn reviews_for_fsrs(
 }
 
 impl RevlogEntry {
-    fn days_elapsed(&self, next_day_at: TimestampSecs) -> u32 {
+    pub(crate) fn days_elapsed(&self, next_day_at: TimestampSecs) -> u32 {
         (next_day_at.elapsed_secs_since(self.id.as_secs()) / 86_400).max(0) as u32
     }
 }

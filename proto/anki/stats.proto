@@ -77,7 +77,7 @@ message GraphsRequest {
 
 message GraphsResponse {
   message Added {
-    map<int32, uint32> added = 1;
+    map<int32, float> added = 1;
   }
   message Intervals {
     map<uint32, uint32> intervals = 1;

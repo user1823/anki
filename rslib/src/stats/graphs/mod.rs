@@ -1,23 +1,32 @@
 // Copyright: Ankitects Pty Ltd and contributors
 // License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
 
-mod added;
+// mod added;
 mod buttons;
 mod card_counts;
 mod eases;
 mod future_due;
 mod hours;
 mod intervals;
+mod memorized;
 mod retention;
 mod retrievability;
 mod reviews;
 mod today;
 
+use std::collections::HashMap;
+
+use anki_proto::stats::graphs_response::Added;
+use fsrs::FSRS;
+
+use crate::card::CardId;
 use crate::config::BoolKey;
 use crate::config::Weekday;
+use crate::deckconfig::DeckConfigId;
 use crate::prelude::*;
 use crate::revlog::RevlogEntry;
 use crate::search::SortMode;
+use crate::stats::graphs::memorized::MemorizedContext;
 
 struct GraphsContext {
     revlog: Vec<RevlogEntry>,
@@ -28,18 +37,10 @@ struct GraphsContext {
 }
 
 impl Collection {
-    pub(crate) fn graph_data_for_search(
-        &mut self,
-        search: &str,
-        days: u32,
-    ) -> Result<anki_proto::stats::GraphsResponse> {
+    fn graph_context(&mut self, search: &str, days: u32) -> Result<GraphsContext> {
         let guard = self.search_cards_into_table(search, SortMode::NoOrder)?;
         let all = search.trim().is_empty();
-        guard.col.graph_data(all, days)
-    }
-
-    fn graph_data(&mut self, all: bool, days: u32) -> Result<anki_proto::stats::GraphsResponse> {
-        let timing = self.timing_today()?;
+        let timing = guard.col.timing_today()?;
         let revlog_start = if days > 0 {
             timing
                 .next_day_at
@@ -47,24 +48,46 @@ impl Collection {
         } else {
             TimestampSecs(0)
         };
-        let offset = self.local_utc_offset_for_user()?;
+        let offset = guard.col.local_utc_offset_for_user()?;
         let local_offset_secs = offset.local_minus_utc() as i64;
         let revlog = if all {
-            self.storage.get_all_revlog_entries(revlog_start)?
+            guard.col.storage.get_all_revlog_entries(revlog_start)?
         } else {
-            self.storage
+            guard
+                .col
+                .storage
                 .get_revlog_entries_for_searched_cards_after_stamp(revlog_start)?
         };
-        let ctx = GraphsContext {
+        Ok(GraphsContext {
             revlog,
             days_elapsed: timing.days_elapsed,
-            cards: self.storage.all_searched_cards()?,
+            cards: guard.col.storage.all_searched_cards()?,
             next_day_start: timing.next_day_at,
             local_offset_secs,
-        };
+        })
+    }
+
+    pub(crate) fn graph_data_for_search(
+        &mut self,
+        search: &str,
+        days: u32,
+    ) -> Result<anki_proto::stats::GraphsResponse> {
+        let ctx = self.graph_context(search, days)?;
+        self.graph_data(ctx)
+    }
+
+    fn graph_data(&mut self, ctx: GraphsContext) -> Result<anki_proto::stats::GraphsResponse> {
         let (eases, difficulty) = ctx.eases();
+
+        let ctx = self.build_memorized_context(ctx)?;
+        let memorized = {
+            Added {
+                added: ctx.historical_fsrs()?,
+            }
+        };
+        let ctx = ctx.graph_context;
         let resp = anki_proto::stats::GraphsResponse {
-            added: Some(ctx.added_days()),
+            added: Some(memorized),
             reviews: Some(ctx.review_counts_and_times()),
             true_retention: Some(ctx.calculate_true_retention()),
             future_due: Some(ctx.future_due()),
@@ -109,5 +132,47 @@ impl Collection {
         )?;
         self.set_config_bool_inner(BoolKey::FutureDueShowBacklog, prefs.future_due_show_backlog)?;
         Ok(())
+    }
+
+    fn memorized_context(&mut self, search: &str) -> Result<MemorizedContext> {
+        let ctx = self.graph_context(search, 0)?;
+        self.build_memorized_context(ctx)
+    }
+    fn build_memorized_context(&mut self, ctx: GraphsContext) -> Result<MemorizedContext> {
+        // Build one FSRS instance per deck config preset using the actual stored
+        // parameters (FSRS-6 → FSRS-5 → FSRS-4 → empty = crate defaults),
+        // matching the getFsrs(config) logic in Anki-Search-Stats-Extended.
+        let config_map = self.storage.get_deck_config_map()?;
+        let mut per_preset_fsrs: HashMap<DeckConfigId, FSRS> =
+            HashMap::with_capacity(config_map.len());
+        for (dcid, config) in &config_map {
+            per_preset_fsrs.insert(*dcid, FSRS::new(Some(config.fsrs_params()))?);
+        }
+        if per_preset_fsrs.is_empty() {
+            per_preset_fsrs.insert(DeckConfigId(0), FSRS::new(Some(&[]))?);
+        }
+
+        // Map card ID → DeckConfigId, respecting original_deck_id for filtered decks.
+        let decks_map = self.storage.get_decks_map()?;
+        let mut card_config_map: HashMap<CardId, DeckConfigId> =
+            HashMap::with_capacity(ctx.cards.len());
+        for card in &ctx.cards {
+            let deck_id = if card.original_deck_id.0 != 0 {
+                card.original_deck_id
+            } else {
+                card.deck_id
+            };
+            if let Some(deck) = decks_map.get(&deck_id) {
+                if let Some(conf_id) = deck.config_id() {
+                    card_config_map.insert(card.id, conf_id);
+                }
+            }
+        }
+
+        Ok(MemorizedContext {
+            graph_context: ctx,
+            per_preset_fsrs,
+            card_config_map,
+        })
     }
 }
