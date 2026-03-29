@@ -14,5 +14,8 @@ color = "always"
 [target.'cfg(all(target_env = "msvc", target_os = "windows"))']
 rustflags = ["-C", "target-feature=+crt-static"]
 
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+
 [build]
 target-dir = "out/rust"
