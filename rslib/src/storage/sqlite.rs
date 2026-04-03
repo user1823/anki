@@ -437,10 +437,20 @@ fn add_extract_fsrs_relative_retrievability(db: &Connection) -> rusqlite::Result
                             .current_retrievability_seconds(state.into(), seconds_elapsed, decay)
                             .max(0.0001);
 
-                        return Ok(Some(
-                            -(current_retrievability.powf(-1.0 / decay) - 1.)
-                                / (desired_retrievability.powf(-1.0 / decay) - 1.),
-                        ));
+                        let retrievability_tomorrow = FSRS::new(None)
+                            .unwrap()
+                            .current_retrievability_seconds(
+                                state.into(),
+                                seconds_elapsed + 86400,
+                                decay,
+                            )
+                            .max(0.0001);
+
+                        let prl = current_retrievability - retrievability_tomorrow;
+
+                        let score = prl + 0.09 * current_retrievability;
+
+                        return Ok(Some(-(score)));
                     }
                 }
             }
