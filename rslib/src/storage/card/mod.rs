@@ -830,7 +830,7 @@ impl fmt::Display for ReviewOrderSubclause {
                 let next_day_at = timing.next_day_at.0;
                 let now = timing.now.0;
                 temp_string =
-                    format!("extract_fsrs_retrievability(data, case when odue !=0 then odue else due end, ivl, {today}, {next_day_at}, {now}) {order}");
+                    format!("ROUND(extract_fsrs_retrievability(data, case when odue !=0 then odue else due end, ivl, {today}, {next_day_at}, {now}), 4) {order}, extract_fsrs_variable(data, 's') {order}");
                 &temp_string
             }
             ReviewOrderSubclause::RelativeOverdueness { fsrs, timing } => {
