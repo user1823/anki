@@ -64,6 +64,7 @@ service BackendSchedulerService {
   rpc FsrsBenchmark(FsrsBenchmarkRequest) returns (FsrsBenchmarkResponse);
   // Used for exporting revlogs for algorithm research.
   rpc ExportDataset(ExportDatasetRequest) returns (generic.Empty);
+  rpc ExportDatasetByPreset(ExportDatasetRequest) returns (generic.Empty);
 }
 
 message SchedulingState {

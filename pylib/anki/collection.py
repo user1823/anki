@@ -428,6 +428,14 @@ class Collection(DeprecatedNamesMixin):
     ) -> None:
         self._backend.export_dataset(min_entries=min_entries, target_path=target_path)
 
+    def export_dataset_for_research_by_preset(
+        self, target_path: str, min_entries: int = 1
+    ) -> None:
+        """Export one dataset file per preset into target_path."""
+        self._backend.export_dataset_by_preset(
+            min_entries=min_entries, target_path=target_path
+        )
+
     # Image Occlusion
     ##########################################################################
 

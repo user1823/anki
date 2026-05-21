@@ -221,13 +221,11 @@ impl Collection {
             .get_revlog_entries_for_searched_cards_in_card_order()
     }
 
-    /// Used for exporting revlogs for algorithm research.
-    pub fn export_dataset(&mut self, min_entries: usize, target_path: &Path) -> Result<()> {
-        let revlog_entries = self.storage.get_revlog_entries_for_export_dataset()?;
-        if revlog_entries.len() < min_entries {
-            return Err(AnkiError::FsrsInsufficientData);
-        }
-        let revlogs = revlog_entries
+    /// Helper for export_dataset and export_dataset_by_preset (Used for exporting revlogs for algorithm research.)
+    fn collect_dataset(&mut self) -> Result<Dataset> {
+        let revlogs = self
+            .storage
+            .get_revlog_entries_for_export_dataset()?
             .into_iter()
             .map(revlog_entry_to_proto)
             .collect_vec();
@@ -260,14 +258,81 @@ impl Collection {
             })
             .collect_vec();
         let next_day_at = self.timing_today()?.next_day_at.0;
-        let dataset = Dataset {
+        Ok(Dataset {
             revlogs,
             cards,
             decks,
             next_day_at,
-        };
-        let data = dataset.encode_to_vec();
-        write_file(target_path, data)?;
+        })
+    }
+
+    /// Used for exporting revlogs for algorithm research.
+    pub fn export_dataset(&mut self, min_entries: usize, target_path: &Path) -> Result<()> {
+        let dataset = self.collect_dataset()?;
+        if dataset.revlogs.len() < min_entries {
+            return Err(AnkiError::FsrsInsufficientData);
+        }
+        write_file(target_path, dataset.encode_to_vec())?;
+        Ok(())
+    }
+
+    /// Export one dataset file per preset into `target_dir`.
+    /// Files are named `<preset_id>.revlog`.
+    /// Presets with fewer than `min_entries` revlogs are skipped.
+    pub fn export_dataset_by_preset(
+        &mut self,
+        min_entries: usize,
+        target_dir: &Path,
+    ) -> Result<()> {
+        let dataset = self.collect_dataset()?;
+
+        // card_id -> preset_id via the deck list
+        let deck_to_preset: HashMap<i64, i64> =
+            dataset.decks.iter().map(|d| (d.id, d.preset_id)).collect();
+        let card_to_preset: HashMap<i64, i64> = dataset
+            .cards
+            .iter()
+            .filter_map(|c| Some((c.id, *deck_to_preset.get(&c.deck_id)?)))
+            .collect();
+
+        let preset_ids: std::collections::HashSet<i64> =
+            dataset.decks.iter().map(|d| d.preset_id).collect();
+
+        for preset_id in preset_ids {
+            let preset_revlogs: Vec<_> = dataset
+                .revlogs
+                .iter()
+                .filter(|r| card_to_preset.get(&r.cid) == Some(&preset_id))
+                .cloned()
+                .collect();
+
+            if preset_revlogs.len() < min_entries {
+                continue;
+            }
+
+            let preset_dataset = Dataset {
+                revlogs: preset_revlogs,
+                cards: dataset
+                    .cards
+                    .iter()
+                    .filter(|c| card_to_preset.get(&c.id) == Some(&preset_id))
+                    .cloned()
+                    .collect(),
+                decks: dataset
+                    .decks
+                    .iter()
+                    .filter(|d| d.preset_id == preset_id)
+                    .cloned()
+                    .collect(),
+                next_day_at: dataset.next_day_at,
+            };
+
+            write_file(
+                &target_dir.join(format!("{preset_id}.revlog")),
+                preset_dataset.encode_to_vec(),
+            )?;
+        }
+
         Ok(())
     }
 
