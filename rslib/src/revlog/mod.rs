@@ -150,7 +150,10 @@ impl Collection {
                 col.storage
                     .get_revlog_entries_for_card_ids_in_card_order_after_stamp(cids, after)
             },
-            |col| col.storage.get_all_revlog_entries_in_card_order_after_stamp(after),
+            |col| {
+                col.storage
+                    .get_all_revlog_entries_in_card_order_after_stamp(after)
+            },
             |_| Ok(()),
         )
     }
@@ -176,12 +179,7 @@ impl Collection {
         )
     }
 
-    pub(crate) fn revlog_entries_in_card_order_chunked<
-        FCardIds,
-        FEntries,
-        FFallback,
-        FAfterChunk,
-    >(
+    pub(crate) fn revlog_entries_in_card_order_chunked<FCardIds, FEntries, FFallback, FAfterChunk>(
         &mut self,
         mut next_card_ids: FCardIds,
         mut entries_for_cards: FEntries,
@@ -198,7 +196,6 @@ impl Collection {
             let change_stamp = self.changes_since_open()?;
             let mut out = Vec::new();
             let mut after_cid = CardId(0);
-            let mut changed_mid_read = false;
 
             loop {
                 let card_ids = next_card_ids(self, after_cid, REVLOG_CHUNK_CARD_COUNT)?;
@@ -211,13 +208,8 @@ impl Collection {
                 after_chunk(self)?;
 
                 if self.changes_since_open()? != change_stamp {
-                    changed_mid_read = true;
                     break;
                 }
-            }
-
-            if !changed_mid_read {
-                return Ok(out);
             }
         }
 
@@ -294,7 +286,12 @@ mod tests {
             let note = NoteAdder::basic(col)
                 .fields(&[&format!("front-{idx}"), "back"])
                 .add(col);
-            let mut card = col.storage.all_cards_of_note(note.id)?.into_iter().next().unwrap();
+            let mut card = col
+                .storage
+                .all_cards_of_note(note.id)?
+                .into_iter()
+                .next()
+                .unwrap();
             card.ctype = CardType::Review;
             card.queue = CardQueue::Review;
             card.interval = 10;
@@ -328,15 +325,17 @@ mod tests {
         let mut col = Collection::new();
         let cids = add_cards_with_reviews(&mut col, 32, 4)?;
 
-        let expected = col.storage.with_searched_cards_table(false, || {
-            col.storage.set_search_table_to_card_ids(&cids)?;
-            col.storage
-                .get_revlog_entries_for_searched_cards_in_card_order_after_stamp(0.into())
-        })?;
-        let actual = col.storage.with_searched_cards_table(false, || {
-            col.storage.set_search_table_to_card_ids(&cids)?;
-            col.searched_revlog_entries_in_card_order_chunked(0.into())
-        })?;
+        col.storage.setup_searched_cards_table()?;
+        col.storage.set_search_table_to_card_ids(&cids)?;
+        let expected = col
+            .storage
+            .get_revlog_entries_for_searched_cards_in_card_order_after_stamp(0.into())?;
+        col.storage.clear_searched_cards_table()?;
+
+        col.storage.setup_searched_cards_table()?;
+        col.storage.set_search_table_to_card_ids(&cids)?;
+        let actual = col.searched_revlog_entries_in_card_order_chunked(0.into())?;
+        col.storage.clear_searched_cards_table()?;
 
         assert_eq!(actual, expected);
         Ok(())
@@ -351,14 +350,20 @@ mod tests {
 
         let actual = col.revlog_entries_in_card_order_chunked(
             |col, after_cid, chunk_size| {
-                col.storage
-                    .get_all_revlog_card_ids_after_stamp_chunk(0.into(), after_cid, chunk_size)
+                col.storage.get_all_revlog_card_ids_after_stamp_chunk(
+                    0.into(),
+                    after_cid,
+                    chunk_size,
+                )
             },
             |col, cids| {
                 col.storage
                     .get_revlog_entries_for_card_ids_in_card_order_after_stamp(cids, 0.into())
             },
-            |col| col.storage.get_all_revlog_entries_in_card_order_after_stamp(0.into()),
+            |col| {
+                col.storage
+                    .get_all_revlog_entries_in_card_order_after_stamp(0.into())
+            },
             |col| {
                 if !inserted {
                     inserted = true;
@@ -395,37 +400,41 @@ mod tests {
         let mut col = Collection::new();
         let cids = add_cards_with_reviews(&mut col, 20_000, 3)?;
         let full_start = Instant::now();
-        let full = col.storage.with_searched_cards_table(false, || {
-            col.storage.set_search_table_to_card_ids(&cids)?;
-            col.storage
-                .get_revlog_entries_for_searched_cards_in_card_order_after_stamp(0.into())
-        })?;
+        col.storage.setup_searched_cards_table()?;
+        col.storage.set_search_table_to_card_ids(&cids)?;
+        let full = col
+            .storage
+            .get_revlog_entries_for_searched_cards_in_card_order_after_stamp(0.into())?;
+        col.storage.clear_searched_cards_table()?;
         let full_elapsed = full_start.elapsed();
 
         let mut max_chunk = Duration::ZERO;
         let chunked_start = Instant::now();
-        let chunked = col.storage.with_searched_cards_table(false, || {
-            col.storage.set_search_table_to_card_ids(&cids)?;
-            col.revlog_entries_in_card_order_chunked(
-                |col, after_cid, chunk_size| {
-                    col.storage
-                        .get_searched_revlog_card_ids_after_stamp_chunk(0.into(), after_cid, chunk_size)
-                },
-                |col, cids| {
-                    let started = Instant::now();
-                    let out = col
-                        .storage
-                        .get_revlog_entries_for_card_ids_in_card_order_after_stamp(cids, 0.into())?;
-                    max_chunk = max_chunk.max(started.elapsed());
-                    Ok(out)
-                },
-                |col| {
-                    col.storage
-                        .get_revlog_entries_for_searched_cards_in_card_order_after_stamp(0.into())
-                },
-                |_| Ok(()),
-            )
-        })?;
+        col.storage.setup_searched_cards_table()?;
+        col.storage.set_search_table_to_card_ids(&cids)?;
+        let chunked = col.revlog_entries_in_card_order_chunked(
+            |col, after_cid, chunk_size| {
+                col.storage.get_searched_revlog_card_ids_after_stamp_chunk(
+                    0.into(),
+                    after_cid,
+                    chunk_size,
+                )
+            },
+            |col, cids| {
+                let started = Instant::now();
+                let out = col
+                    .storage
+                    .get_revlog_entries_for_card_ids_in_card_order_after_stamp(cids, 0.into())?;
+                max_chunk = max_chunk.max(started.elapsed());
+                Ok(out)
+            },
+            |col| {
+                col.storage
+                    .get_revlog_entries_for_searched_cards_in_card_order_after_stamp(0.into())
+            },
+            |_| Ok(()),
+        )?;
+        col.storage.clear_searched_cards_table()?;
         let chunked_elapsed = chunked_start.elapsed();
 
         assert_eq!(full, chunked);

@@ -120,19 +120,6 @@ impl SqliteStorage {
             .collect()
     }
 
-    pub(crate) fn get_revlog_entries_for_searched_cards_after_stamp(
-        &self,
-        after: TimestampSecs,
-    ) -> Result<Vec<RevlogEntry>> {
-        self.db
-            .prepare_cached(concat!(
-                include_str!("get.sql"),
-                " where cid in (select cid from search_cids) and id >= ?"
-            ))?
-            .query_and_then([after.0 * 1000], row_to_revlog_entry)?
-            .collect()
-    }
-
     pub(crate) fn get_revlog_entries_for_searched_cards_in_card_order_after_stamp(
         &self,
         after: TimestampSecs,

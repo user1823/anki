@@ -316,10 +316,10 @@ impl Collection {
         &mut self,
         items: Vec<(CardId, FsrsItemForMemoryState)>,
         fsrs: &FSRS,
-        mut set_decay_and_desired_retention: impl FnMut(&mut Card),
-        mut maybe_reschedule_card: impl FnMut(&mut Card, &mut Self, &FSRS) -> Result<()>,
+        set_decay_and_desired_retention: impl FnMut(&mut Card),
+        maybe_reschedule_card: impl FnMut(&mut Card, &mut Self, &FSRS) -> Result<()>,
         usn: Usn,
-        mut on_updated_card: impl FnMut() -> Result<()>,
+        on_updated_card: impl FnMut() -> Result<()>,
         fsrs_batch_size: usize,
     ) -> Result<()> {
         self.update_memory_state_for_cards_with_items_in_batches(
@@ -713,8 +713,8 @@ mod tests {
     }
 
     mod update_memory_state {
-        use std::collections::HashMap;
         use super::*;
+        use std::collections::HashMap;
         use std::time::Instant;
 
         use crate::card::CardQueue;
@@ -730,7 +730,12 @@ mod tests {
                 let note = NoteAdder::basic(&mut col)
                     .fields(&[&format!("front-{idx}"), "back"])
                     .add(&mut col);
-                let mut card = col.storage.all_cards_of_note(note.id)?.into_iter().next().unwrap();
+                let mut card = col
+                    .storage
+                    .all_cards_of_note(note.id)?
+                    .into_iter()
+                    .next()
+                    .unwrap();
                 card.ctype = CardType::Review;
                 card.queue = CardQueue::Review;
                 card.interval = 10;
@@ -826,7 +831,7 @@ mod tests {
 
         #[test]
         fn smaller_batch_size_preserves_results() -> Result<()> {
-            let (mut expected_col, cids) = prepare_collection(32)?;
+            let (mut expected_col, _) = prepare_collection(32)?;
             let (mut actual_col, _) = prepare_collection(32)?;
 
             expected_col.transact(Op::UpdateDeckConfig, |col| {
@@ -836,9 +841,10 @@ mod tests {
                 col.update_memory_state_with_batch_size(vec![make_entry()], 250)
             })?;
 
-            for cid in cids {
-                let expected = expected_col.storage.get_card(cid)?.unwrap();
-                let actual = actual_col.storage.get_card(cid)?.unwrap();
+            let expected_cards = expected_col.storage.get_all_cards();
+            let actual_cards = actual_col.storage.get_all_cards();
+
+            for (expected, actual) in expected_cards.iter().zip(actual_cards.iter()) {
                 assert_eq!(actual.memory_state, expected.memory_state);
                 assert_eq!(actual.desired_retention, expected.desired_retention);
                 assert_eq!(actual.decay, expected.decay);
