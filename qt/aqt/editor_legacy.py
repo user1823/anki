@@ -184,6 +184,8 @@ class Editor:
         self.state: EditorState = EditorState.INITIAL
         # used for the io mask editor's context menu
         self.last_io_image_path: str | None = None
+        self._duplicate_check_in_flight = False
+        self._duplicate_check_pending = False
         self._init_links()
         self.setupOuter()
         self.add_webview()
@@ -713,11 +715,20 @@ require("anki/ui").loaded.then(() => require("anki/NoteEditor").instances[0].too
         note = self.note
         if not note:
             return
+        if self._duplicate_check_in_flight:
+            self._duplicate_check_pending = True
+            return
+        self._duplicate_check_in_flight = True
 
         def on_done(result: NoteFieldsCheckResult.V) -> None:
-            if self.note != note:
-                return
-            self._update_duplicate_display(result)
+            self._duplicate_check_in_flight = False
+            try:
+                if self.note == note:
+                    self._update_duplicate_display(result)
+            finally:
+                if self._duplicate_check_pending:
+                    self._duplicate_check_pending = False
+                    self._check_and_update_duplicate_display_async()
 
         QueryOp(
             parent=self.parentWindow,

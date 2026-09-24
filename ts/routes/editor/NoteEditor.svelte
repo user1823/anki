@@ -351,6 +351,8 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
     }
 
     let hint: string = "";
+    let duplicateCheckInFlight = false;
+    let duplicateCheckPending = false;
     export function setClozeHint(hnt: string): void {
         hint = hnt;
     }
@@ -533,17 +535,38 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
         if (!note) {
             return;
         }
-        const result = await noteFieldsCheck(note);
-        const cols = new Array(note.fields.length).fill("");
-        if (result.state === NoteFieldsCheckResponse_State.DUPLICATE) {
-            cols[0] = "dupe";
-        } else if (result.state === NoteFieldsCheckResponse_State.NOTETYPE_NOT_CLOZE) {
-            hint = tr.addingClozeOutsideClozeNotetype();
-        } else if (result.state === NoteFieldsCheckResponse_State.FIELD_NOT_CLOZE) {
-            hint = tr.addingClozeOutsideClozeField();
+        if (duplicateCheckInFlight) {
+            duplicateCheckPending = true;
+            return;
         }
-        setBackgrounds(cols);
-        setClozeHint(hint);
+        duplicateCheckInFlight = true;
+        const currentNote = note;
+        try {
+            const result = await noteFieldsCheck(currentNote);
+            if (note !== currentNote) {
+                return;
+            }
+
+            const cols = new Array(currentNote.fields.length).fill("");
+            let clozeHint = "";
+            if (result.state === NoteFieldsCheckResponse_State.DUPLICATE) {
+                cols[0] = "dupe";
+            } else if (
+                result.state === NoteFieldsCheckResponse_State.NOTETYPE_NOT_CLOZE
+            ) {
+                clozeHint = tr.addingClozeOutsideClozeNotetype();
+            } else if (result.state === NoteFieldsCheckResponse_State.FIELD_NOT_CLOZE) {
+                clozeHint = tr.addingClozeOutsideClozeField();
+            }
+            setBackgrounds(cols);
+            setClozeHint(clozeHint);
+        } finally {
+            duplicateCheckInFlight = false;
+            if (duplicateCheckPending) {
+                duplicateCheckPending = false;
+                void updateDuplicateDisplay();
+            }
+        }
     }
 
     async function noteCanBeAdded(): Promise<boolean> {
