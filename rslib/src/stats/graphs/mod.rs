@@ -50,10 +50,9 @@ impl Collection {
         let offset = self.local_utc_offset_for_user()?;
         let local_offset_secs = offset.local_minus_utc() as i64;
         let revlog = if all {
-            self.storage.get_all_revlog_entries(revlog_start)?
+            self.all_revlog_entries_in_card_order_chunked(revlog_start)?
         } else {
-            self.storage
-                .get_revlog_entries_for_searched_cards_after_stamp(revlog_start)?
+            self.searched_revlog_entries_in_card_order_chunked(revlog_start)?
         };
         let ctx = GraphsContext {
             revlog,

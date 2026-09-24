@@ -216,13 +216,12 @@ impl Collection {
         // a whole-collection search can match revlog entries of deleted cards, too
         if let Node::Group(nodes) = &search {
             if let &[Node::Search(SearchNode::WholeCollection)] = &nodes[..] {
-                return self.storage.get_all_revlog_entries_in_card_order();
+                return self.all_revlog_entries_in_card_order_chunked(0.into());
             }
         }
         self.search_cards_into_table(search, SortMode::NoOrder)?
             .col
-            .storage
-            .get_revlog_entries_for_searched_cards_in_card_order()
+            .searched_revlog_entries_in_card_order_chunked(0.into())
     }
 
     /// Used for exporting revlogs for algorithm research.

@@ -10,6 +10,7 @@ use rusqlite::types::ValueRef;
 use rusqlite::OptionalExtension;
 use rusqlite::Row;
 
+use super::ids_to_string;
 use super::SqliteStorage;
 use crate::error::Result;
 use crate::prelude::*;
@@ -132,6 +133,19 @@ impl SqliteStorage {
             .collect()
     }
 
+    pub(crate) fn get_revlog_entries_for_searched_cards_in_card_order_after_stamp(
+        &self,
+        after: TimestampSecs,
+    ) -> Result<Vec<RevlogEntry>> {
+        self.db
+            .prepare_cached(concat!(
+                include_str!("get.sql"),
+                " where cid in (select cid from search_cids) and id >= ? order by cid, id"
+            ))?
+            .query_and_then([after.0 * 1000], row_to_revlog_entry)?
+            .collect()
+    }
+
     pub(crate) fn get_revlog_entries_for_searched_cards(&self) -> Result<Vec<RevlogEntry>> {
         self.db
             .prepare_cached(concat!(
@@ -172,9 +186,72 @@ impl SqliteStorage {
             .collect()
     }
 
+    pub(crate) fn get_all_revlog_entries_in_card_order_after_stamp(
+        &self,
+        after: TimestampSecs,
+    ) -> Result<Vec<RevlogEntry>> {
+        self.db
+            .prepare_cached(concat!(
+                include_str!("get.sql"),
+                " where id >= ? order by cid, id"
+            ))?
+            .query_and_then([after.0 * 1000], row_to_revlog_entry)?
+            .collect()
+    }
+
     pub(crate) fn get_all_revlog_entries(&self, after: TimestampSecs) -> Result<Vec<RevlogEntry>> {
         self.db
             .prepare_cached(concat!(include_str!("get.sql"), " where id >= ?"))?
+            .query_and_then([after.0 * 1000], row_to_revlog_entry)?
+            .collect()
+    }
+
+    pub(crate) fn get_all_revlog_card_ids_after_stamp_chunk(
+        &self,
+        after: TimestampSecs,
+        after_cid: CardId,
+        limit: usize,
+    ) -> Result<Vec<CardId>> {
+        self.db
+            .prepare_cached(
+                "select distinct cid from revlog where id >= ? and cid > ? order by cid limit ?",
+            )?
+            .query_map((after.0 * 1000, after_cid, limit as i64), |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn get_searched_revlog_card_ids_after_stamp_chunk(
+        &self,
+        after: TimestampSecs,
+        after_cid: CardId,
+        limit: usize,
+    ) -> Result<Vec<CardId>> {
+        self.db
+            .prepare_cached(
+                "select distinct cid from revlog where id >= ? and cid in (select cid from search_cids) and cid > ? order by cid limit ?",
+            )?
+            .query_map((after.0 * 1000, after_cid, limit as i64), |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn get_revlog_entries_for_card_ids_in_card_order_after_stamp(
+        &self,
+        card_ids: &[CardId],
+        after: TimestampSecs,
+    ) -> Result<Vec<RevlogEntry>> {
+        if card_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut sql = String::from(include_str!("get.sql"));
+        sql.push_str(" where cid in ");
+        ids_to_string(&mut sql, card_ids.iter().copied());
+        sql.push_str(" and id >= ? order by cid, id");
+
+        self.db
+            .prepare(&sql)?
             .query_and_then([after.0 * 1000], row_to_revlog_entry)?
             .collect()
     }

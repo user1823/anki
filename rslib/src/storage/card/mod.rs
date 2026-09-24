@@ -732,6 +732,20 @@ impl super::SqliteStorage {
         Ok(())
     }
 
+    pub(crate) fn searched_card_ids_chunk(
+        &self,
+        after_rowid: i64,
+        limit: usize,
+    ) -> Result<Vec<CardId>> {
+        self.db
+            .prepare_cached(
+                "select cid from search_cids where rowid > ? order by rowid limit ?",
+            )?
+            .query_map((after_rowid, limit as i64), |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Fix cards with low eases due to schema 15 bug.
     /// Deck configs were defaulting to 2.5% ease, which was capped to
     /// 130% when the deck options were edited for the first time.

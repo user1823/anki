@@ -74,6 +74,8 @@ impl<T> ChunkIntoVecs<T> for Vec<T> {
     }
 }
 
+const FSRS_WRITE_BATCH_SIZE: usize = 250;
+
 impl Collection {
     /// For each provided set of params, locate cards with the provided search,
     /// and update their memory state.
@@ -83,6 +85,14 @@ impl Collection {
     pub(crate) fn update_memory_state(
         &mut self,
         entries: Vec<UpdateMemoryStateEntry>,
+    ) -> Result<()> {
+        self.update_memory_state_with_batch_size(entries, FSRS_WRITE_BATCH_SIZE)
+    }
+
+    fn update_memory_state_with_batch_size(
+        &mut self,
+        entries: Vec<UpdateMemoryStateEntry>,
+        fsrs_batch_size: usize,
     ) -> Result<()> {
         let timing = self.timing_today()?;
         let usn = self.usn()?;
@@ -252,6 +262,7 @@ impl Collection {
                 reschedule,
                 usn,
                 on_updated_card,
+                fsrs_batch_size,
             )?;
         }
         Ok(())
@@ -309,9 +320,29 @@ impl Collection {
         mut maybe_reschedule_card: impl FnMut(&mut Card, &mut Self, &FSRS) -> Result<()>,
         usn: Usn,
         mut on_updated_card: impl FnMut() -> Result<()>,
+        fsrs_batch_size: usize,
     ) -> Result<()> {
-        const FSRS_BATCH_SIZE: usize = 1000;
+        self.update_memory_state_for_cards_with_items_in_batches(
+            items,
+            fsrs,
+            set_decay_and_desired_retention,
+            maybe_reschedule_card,
+            usn,
+            on_updated_card,
+            fsrs_batch_size,
+        )
+    }
 
+    fn update_memory_state_for_cards_with_items_in_batches(
+        &mut self,
+        items: Vec<(CardId, FsrsItemForMemoryState)>,
+        fsrs: &FSRS,
+        mut set_decay_and_desired_retention: impl FnMut(&mut Card),
+        mut maybe_reschedule_card: impl FnMut(&mut Card, &mut Self, &FSRS) -> Result<()>,
+        usn: Usn,
+        mut on_updated_card: impl FnMut() -> Result<()>,
+        fsrs_batch_size: usize,
+    ) -> Result<()> {
         let mut to_update = Vec::new();
         let mut fsrs_items = Vec::new();
         let mut starting_states = Vec::new();
@@ -331,9 +362,9 @@ impl Collection {
         p.apply_slice_in_place(&mut starting_states);
 
         for ((to_update, fsrs_items), starting_states) in to_update
-            .chunk_into_vecs(FSRS_BATCH_SIZE)
-            .zip_eq(fsrs_items.chunk_into_vecs(FSRS_BATCH_SIZE))
-            .zip_eq(starting_states.chunk_into_vecs(FSRS_BATCH_SIZE))
+            .chunk_into_vecs(fsrs_batch_size)
+            .zip_eq(fsrs_items.chunk_into_vecs(fsrs_batch_size))
+            .zip_eq(starting_states.chunk_into_vecs(fsrs_batch_size))
         {
             let memory_states = fsrs.memory_state_batch(fsrs_items, starting_states)?;
 
@@ -682,7 +713,66 @@ mod tests {
     }
 
     mod update_memory_state {
+        use std::collections::HashMap;
         use super::*;
+        use std::time::Instant;
+
+        use crate::card::CardQueue;
+        use crate::card::CardType;
+        use crate::tests::NoteAdder;
+
+        fn prepare_collection(card_count: usize) -> Result<(Collection, Vec<CardId>)> {
+            let mut col = Collection::new();
+            let mut cids = Vec::with_capacity(card_count);
+            let mut revlog_id = 10_000_i64;
+
+            for idx in 0..card_count {
+                let note = NoteAdder::basic(&mut col)
+                    .fields(&[&format!("front-{idx}"), "back"])
+                    .add(&mut col);
+                let mut card = col.storage.all_cards_of_note(note.id)?.into_iter().next().unwrap();
+                card.ctype = CardType::Review;
+                card.queue = CardQueue::Review;
+                card.interval = 10;
+                col.storage.update_card(&card)?;
+                cids.push(card.id);
+
+                for review_idx in 0..3 {
+                    col.storage.add_revlog_entry(
+                        &RevlogEntry {
+                            id: RevlogId(revlog_id),
+                            cid: card.id,
+                            button_chosen: 3,
+                            interval: 10 + review_idx as i32,
+                            last_interval: 9 + review_idx as i32,
+                            ease_factor: 2500,
+                            taken_millis: 1000,
+                            review_kind: RevlogReviewKind::Review,
+                            ..Default::default()
+                        },
+                        false,
+                    )?;
+                    revlog_id += 1;
+                }
+            }
+
+            Ok((col, cids))
+        }
+
+        fn make_entry() -> UpdateMemoryStateEntry {
+            UpdateMemoryStateEntry {
+                req: Some(UpdateMemoryStateRequest {
+                    params: vec![],
+                    preset_desired_retention: 0.9,
+                    historical_retention: 0.9,
+                    max_interval: 36500,
+                    reschedule: false,
+                    deck_desired_retention: HashMap::new(),
+                }),
+                search: Node::Search(SearchNode::WholeCollection),
+                ignore_before: TimestampMillis(0),
+            }
+        }
 
         #[test]
         fn no_req_clears_fsrs_data() -> Result<()> {
@@ -731,6 +821,56 @@ mod tests {
             assert_eq!(card.desired_retention, None);
             assert_eq!(card.decay, None);
 
+            Ok(())
+        }
+
+        #[test]
+        fn smaller_batch_size_preserves_results() -> Result<()> {
+            let (mut expected_col, cids) = prepare_collection(32)?;
+            let (mut actual_col, _) = prepare_collection(32)?;
+
+            expected_col.transact(Op::UpdateDeckConfig, |col| {
+                col.update_memory_state_with_batch_size(vec![make_entry()], 1000)
+            })?;
+            actual_col.transact(Op::UpdateDeckConfig, |col| {
+                col.update_memory_state_with_batch_size(vec![make_entry()], 250)
+            })?;
+
+            for cid in cids {
+                let expected = expected_col.storage.get_card(cid)?.unwrap();
+                let actual = actual_col.storage.get_card(cid)?.unwrap();
+                assert_eq!(actual.memory_state, expected.memory_state);
+                assert_eq!(actual.desired_retention, expected.desired_retention);
+                assert_eq!(actual.decay, expected.decay);
+                assert_eq!(actual.interval, expected.interval);
+                assert_eq!(actual.due, expected.due);
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        #[ignore]
+        fn bench_smaller_batch_size_reports_tradeoff() -> Result<()> {
+            let (mut baseline_col, _) = prepare_collection(2_000)?;
+            let (mut smaller_batch_col, _) = prepare_collection(2_000)?;
+
+            let baseline_start = Instant::now();
+            baseline_col.transact(Op::UpdateDeckConfig, |col| {
+                col.update_memory_state_with_batch_size(vec![make_entry()], 1000)
+            })?;
+            let baseline_elapsed = baseline_start.elapsed();
+
+            let smaller_start = Instant::now();
+            smaller_batch_col.transact(Op::UpdateDeckConfig, |col| {
+                col.update_memory_state_with_batch_size(vec![make_entry()], 250)
+            })?;
+            let smaller_elapsed = smaller_start.elapsed();
+
+            println!(
+                "batch1000={:?} batch250={:?}",
+                baseline_elapsed, smaller_elapsed
+            );
             Ok(())
         }
     }
