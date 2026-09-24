@@ -101,7 +101,7 @@ anki.latex.setup_hook()
 logger = logging.getLogger(__name__)
 
 SearchJoiner = Literal["AND", "OR"]
-_FIND_DUPES_CHUNK_SIZE = 5000
+_FIND_DUPES_CHUNK_SIZE = 2000
 
 
 @dataclass

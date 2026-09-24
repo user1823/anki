@@ -340,7 +340,7 @@ def test_find_dupes_chunking_preserves_output():
     finally:
         time.sleep = original_sleep
 
-    assert calls == 2
+    assert calls == 5
     assert dupes == col.find_dupes("Back")
     assert len(dupes) == 3350
     assert dupes[0][0] == "dupe-0"
