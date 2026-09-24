@@ -2,6 +2,8 @@
 # License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
 
 # coding: utf-8
+import time
+
 import pytest
 
 from anki.browser import BrowserConfig
@@ -312,3 +314,34 @@ def test_findDupes():
     assert not r
     # front isn't dupe
     assert col.find_dupes("Front") == []
+
+
+def test_find_dupes_chunking_preserves_output():
+    col = getEmptyCol()
+    rows = []
+    for idx in range(10_050):
+        note = col.newNote()
+        note["Front"] = f"front-{idx}"
+        note["Back"] = f"dupe-{idx // 3}"
+        col.addNote(note)
+        rows.append((note.id, note.mid, note.fields))
+
+    calls = 0
+    original_sleep = time.sleep
+
+    def counting_sleep(seconds: float) -> None:
+        nonlocal calls
+        calls += 1
+        assert seconds == 0
+
+    time.sleep = counting_sleep
+    try:
+        dupes = col._find_dupes_in_rows("Back", rows)
+    finally:
+        time.sleep = original_sleep
+
+    assert calls == 2
+    assert dupes == col.find_dupes("Back")
+    assert len(dupes) == 3350
+    assert dupes[0][0] == "dupe-0"
+    assert len(dupes[0][1]) == 3

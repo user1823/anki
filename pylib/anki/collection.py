@@ -101,6 +101,7 @@ anki.latex.setup_hook()
 logger = logging.getLogger(__name__)
 
 SearchJoiner = Literal["AND", "OR"]
+_FIND_DUPES_CHUNK_SIZE = 5000
 
 
 @dataclass
@@ -746,35 +747,50 @@ class Collection(DeprecatedNamesMixin):
         nids = self.find_notes(
             self.build_search_string(search, SearchNode(field_name=field_name))
         )
-        # go through notes
+        return self._find_dupes_in_rows(
+            field_name,
+            self.db.all(f"select id, mid, flds from notes where id in {ids2str(nids)}"),
+        )
+
+    def _find_dupes_in_rows(
+        self,
+        field_name: str,
+        rows: Sequence[tuple[int, NotetypeId, str]],
+    ) -> list[tuple[str, list[int]]]:
         vals: dict[str, list[int]] = {}
         dupes = []
-        fields: dict[int, int] = {}
+        fields: dict[int, int | None] = {}
+        field_name_lower = field_name.lower()
 
-        def ord_for_mid(mid: NotetypeId) -> int:
+        def ord_for_mid(mid: NotetypeId) -> int | None:
             if mid not in fields:
                 model = self.models.get(mid)
-                for idx, field in enumerate(model["flds"]):
-                    if field["name"].lower() == field_name.lower():
-                        fields[mid] = idx
-                        break
+                fields[mid] = next(
+                    (
+                        idx
+                        for idx, field in enumerate(model["flds"])
+                        if field["name"].lower() == field_name_lower
+                    ),
+                    None,
+                )
             return fields[mid]
 
-        for nid, mid, flds in self.db.all(
-            f"select id, mid, flds from notes where id in {ids2str(nids)}"
-        ):
-            flds = split_fields(flds)
+        for idx, (nid, mid, flds) in enumerate(rows, start=1):
             ord = ord_for_mid(mid)
             if ord is None:
                 continue
-            val = flds[ord]
-            val = strip_html_media(val)
+
+            val = strip_html_media(split_fields(flds)[ord])
             # empty does not count as duplicate
             if not val:
                 continue
             vals.setdefault(val, []).append(nid)
             if len(vals[val]) == 2:
                 dupes.append((val, vals[val]))
+
+            if idx % _FIND_DUPES_CHUNK_SIZE == 0:
+                time.sleep(0)
+
         return dupes
 
     # Search Strings
